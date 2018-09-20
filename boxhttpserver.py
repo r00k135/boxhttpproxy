@@ -17,6 +17,7 @@ import urllib3
 import urllib.parse
 import certifi
 import mimetypes
+import threading
 
 from socketserver import ThreadingMixIn
 from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHandler 
@@ -49,7 +50,7 @@ folder_cache = {
 }
 
 http_pool_headers = urllib3.make_headers(
-    #keep_alive=True, 
+    keep_alive=True, 
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36"
     )
 
@@ -59,13 +60,17 @@ http_pool_mgr = urllib3.PoolManager(maxsize=50,
     block=False,
     cert_reqs='CERT_REQUIRED',
     ca_certs=certifi.where())
+#urllib3.disable_warnings()
+#logging.captureWarnings(False)
+
+
 
 class S(SimpleHTTPRequestHandler):
 	def do_GET(self):
 		# check if folder_cache is fresh
 		global folder_cache_last_refresh, folder_cache, FILESYSTEM_REFRESH_TIME
 		response = ""
-		logging.info("GET request, Path: %s Headers: %s", str(self.path), pprint.saferepr(str(self.headers)))
+		logging.info("GET request, Path: %s Threads: %d Headers: %s", str(self.path), threading.active_count(), pprint.saferepr(str(self.headers)))
 		if (time.time() - folder_cache_last_refresh) > FILESYSTEM_REFRESH_TIME:
 			folder_cache_last_refresh = time.time()
 			populateFolderCache("/")
@@ -143,11 +148,45 @@ class S(SimpleHTTPRequestHandler):
 					if len(rangeSplit) > 1:
 						startByte = int(rangeSplit[0])
 						if startByte > (int(folder_cache[searchpath]["st_size"])-1):
-							startByte = int(folder_cache[searchpath]["st_size"])-1
+							self.send_response(416)
+							self.send_header('Content-Type', 'text/html')
+							self.send_header('Connection', 'close')
+							self.end_headers()
+							response='''
+								<html>
+								<head>
+								<title>416 Range Not Satisfiable</title>
+								</head>
+								<body>
+								<h1>416 Range Not Satisfiable</h1>
+								<p>Request out of range (startByte) was %d should be less than %d.</p>
+								</body>
+								</html>
+							''' % (startByte, int(folder_cache[searchpath]["st_size"])-1)
+							self.wfile.write(bytes(response, 'UTF-8'))
+							logging.info("Box request: %s Range:%s Status: 416", boxurl, boxheaders["Range"])
+							return
 						if rangeSplit[1] != "":
 							endByte = int(rangeSplit[1])
 						if endByte > (int(folder_cache[searchpath]["st_size"])-1):
-							endByte = int(folder_cache[searchpath]["st_size"])-1
+							self.send_response(416)
+							self.send_header('Content-Type', 'text/html')
+							self.send_header('Connection', 'close')
+							self.end_headers()
+							response='''
+								<html>
+								<head>
+								<title>416 Range Not Satisfiable</title>
+								</head>
+								<body>
+								<h1>416 Range Not Satisfiable</h1>
+								<p>Request out of range (endByte) was %d should be less than %d.</p>
+								</body>
+								</html>
+							''' % (endByte, int(folder_cache[searchpath]["st_size"])-1)
+							self.wfile.write(bytes(response, 'UTF-8'))
+							logging.info("Box request: %s Range:%s Status: 416", boxurl, boxheaders["Range"])
+							return
 					else:
 						startByte = rangeSplit[0]
 						if startByte > (int(folder_cache[searchpath]["st_size"])-1):
@@ -155,11 +194,11 @@ class S(SimpleHTTPRequestHandler):
 						endByte = int(folder_cache[searchpath]["st_size"])-1
 					boxheaders["Range"] = "bytes="+str(startByte)+"-"+str(endByte)
 				boxurl = 'https://api.box.com/2.0/files/'+str(folder_cache[path]["boxid"])+'/content'
-				logging.info("Box request: %s\nheaders:%s", boxurl, pprint.saferepr(boxheaders))	
+				logging.info("Box request: %s headers:%s", boxurl, pprint.saferepr(boxheaders))	
 				chunk_cnt = 1
 				chunk_size = 524288
 				downloaded = 0
-				self.send_response(206)
+				self.send_response(200)
 				r_dl = http_pool_mgr.request('GET', boxurl, headers=boxheaders, preload_content=False)
 				if r_dl.status == 200 or r_dl.status == 206:
 					self.send_header('Content-Type', folder_cache[searchpath]["mime"])
@@ -175,7 +214,7 @@ class S(SimpleHTTPRequestHandler):
 							self.wfile.write(chunk)
 						except:
 							e = sys.exc_info()
-							logging.info("Box request: %s Range:%s Exception:%s", boxurl, boxheaders["Range"], pprint.saferepr(e))
+							logging.error("Box request: %s Range:%s Exception:%s", boxurl, boxheaders["Range"], pprint.saferepr(e))
 							break;
 						chunk_cnt += 1
 					r_dl.release_conn()
@@ -197,6 +236,8 @@ class S(SimpleHTTPRequestHandler):
 					self.wfile.write(response.encode('UTF-8'))
 				end_dl = time.time()
 				elapse_dl = end_dl-start_dl
+				if "Range" not in boxheaders:
+					boxheaders["Range"] = "not set"
 				logging.info("Box request: %s Range:%s Status: %d Released, Elapsed:%f Downloaded(Chunks):%d bytes Downloaded(b):%d bytes", boxurl, boxheaders["Range"], r_dl.status, elapse_dl, (chunk_cnt*chunk_size), downloaded)
 				return
 		else:
@@ -278,7 +319,7 @@ class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
 
 def run(server_class=HTTPServer, handler_class=S, port=8080):
 	global folder_cache_last_refresh
-	logging.basicConfig(level=logging.INFO)
+	logging.basicConfig(level=logging.WARN)
 	server_address = ('', port)
 	handler_class.server_version = "nginx/1.14.0"
 	handler_class.sys_version = "(Ubuntu)"
