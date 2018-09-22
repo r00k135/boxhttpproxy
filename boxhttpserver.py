@@ -9,9 +9,6 @@ import argparse
 import code
 import pprint
 import json
-import stat
-import fuse
-import fusepy
 import time
 import urllib3
 import urllib.parse
@@ -24,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHan
 import logging
 from boxsdk import OAuth2, Client
 
-TOKENS_DIR="./tokens"
+TOKENS_DIR="/etc/boxhttpproxy/tokens"
 TOKENS_FILE=TOKENS_DIR+"/tokens"
 APP_CLIENTID="3wvqtoo6dbgeka2xctl1u6hx7btws16c"
 APP_SECRET="gzU3R6z5AxkMD6DZ4GzvMtBxr9by7pHy"
@@ -66,6 +63,10 @@ http_pool_mgr = urllib3.PoolManager(maxsize=50,
 
 
 class S(SimpleHTTPRequestHandler):
+	def log_message(self, format, *args):
+		logging.error("%s - - [%s] %s" % (self.client_address[0], 
+			self.log_date_time_string(), 
+			format%args))
 	def do_GET(self):
 		# check if folder_cache is fresh
 		global folder_cache_last_refresh, folder_cache, FILESYSTEM_REFRESH_TIME
@@ -319,7 +320,7 @@ class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
 
 def run(server_class=HTTPServer, handler_class=S, port=8080):
 	global folder_cache_last_refresh
-	logging.basicConfig(level=logging.WARN)
+	logging.basicConfig(stream=sys.stdout,level=logging.WARN)
 	server_address = ('', port)
 	handler_class.server_version = "nginx/1.14.0"
 	handler_class.sys_version = "(Ubuntu)"
@@ -386,6 +387,12 @@ if __name__ == '__main__':
 				print ("Error open tokens file: "+e)
 	else:
 		oauth = authenticate_with_box() 
+
+	if len(argv) == 2:
+		if str(argv[1]) == "firstrun":
+			print ("First run exiting")
+			sys.exit()
+
 	print ("Loading mimetypes")
 	mimetype_locations=['/etc/mime.types']
 	contentTypes = mimetypes.types_map
@@ -394,6 +401,7 @@ if __name__ == '__main__':
 			more = mimetypes.read_mime_types(location)
 			if more is not None:
 				contentTypes.update(more)
+
 
 	print ("Starting box client")
 	client = Client(oauth)
