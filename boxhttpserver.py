@@ -15,6 +15,7 @@ import urllib.parse
 import certifi
 import mimetypes
 import threading
+import uuid
 
 from socketserver import ThreadingMixIn
 from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHandler 
@@ -27,6 +28,8 @@ APP_CLIENTID="3wvqtoo6dbgeka2xctl1u6hx7btws16c"
 APP_SECRET="gzU3R6z5AxkMD6DZ4GzvMtBxr9by7pHy"
 APP_ACCESS_TOKEN=""
 FILESYSTEM_REFRESH_TIME=600
+
+loglevel = logging.INFO
 
 oauth = None
 client = None
@@ -70,8 +73,10 @@ class S(SimpleHTTPRequestHandler):
 	def do_GET(self):
 		# check if folder_cache is fresh
 		global folder_cache_last_refresh, folder_cache, FILESYSTEM_REFRESH_TIME
+		request_id = uuid.uuid4()
 		response = ""
-		logging.info("GET request, Path: %s Threads: %d Headers: %s", str(self.path), threading.active_count(), pprint.saferepr(str(self.headers)))
+		response_code = 200
+		logging.info("%s: GET request, Path: %s Threads: %d Headers: %s", request_id, str(self.path), threading.active_count(), pprint.saferepr(str(self.headers)))
 		if (time.time() - folder_cache_last_refresh) > FILESYSTEM_REFRESH_TIME:
 			folder_cache_last_refresh = time.time()
 			populateFolderCache("/")
@@ -83,7 +88,7 @@ class S(SimpleHTTPRequestHandler):
 			if folder_cache[searchpath]["type"] == "folder":
 				if path.endswith("/") == False:
 					# redirect to path with / at the end
-					logging.info("GET request, Path: %s Redirect with / at the end", str(self.path))
+					logging.info("%s: GET request, Path: %s Redirect Folder with / at the end", request_id, str(self.path))
 					self.send_response(301)
 					self.send_header('Content-Type', 'text/html')
 					self.send_header('Connection', 'close')
@@ -98,9 +103,10 @@ class S(SimpleHTTPRequestHandler):
 						<body>
 						<h1>Moved</h1>
 						<p>This page has moved to <a href="%s">%s</a>.</p>
+						<p>Request id: %s</p>
 						</body>
 						</html>
-					''' % (path+"/", path+"/")
+					''' % (path+"/", path+"/", request_id)
 					self.wfile.write(bytes(response.format(self.path), 'UTF-8'))
 					return
 				# build response
@@ -121,7 +127,7 @@ class S(SimpleHTTPRequestHandler):
 						displayfilename = displayfilename[:47]+"..&gt;"
 					response += "<a href=\"%s\">%-55s%s%20s\r\n" % (urllib.parse.quote(filename), displayfilename+"</a> ", time.strftime('%d-%b-%Y %H:%M', time.localtime(folder_cache[item]["st_mtime"])), item_size)
 				response += "</pre><hr></body>\r\n</html>\r\n"
-				self.send_response(200)
+				self.send_response(response_code)
 				self.send_header('Content-Length', len(response))
 				self.send_header('Accept-Ranges', 'bytes')
 				self.send_header('Connection', 'close')
@@ -131,10 +137,10 @@ class S(SimpleHTTPRequestHandler):
 				self.wfile.write(response.encode('UTF-8'))
 				end_dl = time.time()
 				elapse_dl = end_dl-start_dl
-				logging.info("GET request, Path: %s Ending Download, Elapsed:%f", str(self.path), elapse_dl)
+				logging.info("%s: GET request, Path: %s Ending Folder Download, Elapsed:%f", request_id, str(self.path), elapse_dl)
 				return
 			else:
-				logging.info("GET request, Path: %s Starting Download", str(self.path))
+				logging.info("%s: GET request, Path: %s File", request_id, str(self.path))
 				start_dl = time.time()
 				boxheaders = { 
 					'Authorization': 'Bearer '+oauth.access_token,
@@ -145,6 +151,7 @@ class S(SimpleHTTPRequestHandler):
 				endByte = int(folder_cache[searchpath]["st_size"])-1
 				if "Range" in self.headers:
 					rangeStr = self.headers["Range"].replace("bytes=", "")
+					#response_code = 206
 					rangeSplit = rangeStr.split("-")
 					if len(rangeSplit) > 1:
 						startByte = int(rangeSplit[0])
@@ -161,11 +168,12 @@ class S(SimpleHTTPRequestHandler):
 								<body>
 								<h1>416 Range Not Satisfiable</h1>
 								<p>Request out of range (startByte) was %d should be less than %d.</p>
+								<p>Request id: %s</p>
 								</body>
 								</html>
-							''' % (startByte, int(folder_cache[searchpath]["st_size"])-1)
+							''' % (startByte, int(folder_cache[searchpath]["st_size"])-1, request_id)
+							logging.info("%s: Box request: %s Range:%s Status: 416", request_id, boxurl, boxheaders["Range"])
 							self.wfile.write(bytes(response, 'UTF-8'))
-							logging.info("Box request: %s Range:%s Status: 416", boxurl, boxheaders["Range"])
 							return
 						if rangeSplit[1] != "":
 							endByte = int(rangeSplit[1])
@@ -182,64 +190,75 @@ class S(SimpleHTTPRequestHandler):
 								<body>
 								<h1>416 Range Not Satisfiable</h1>
 								<p>Request out of range (endByte) was %d should be less than %d.</p>
+								<p>Request id: %s</p>
 								</body>
 								</html>
-							''' % (endByte, int(folder_cache[searchpath]["st_size"])-1)
+							''' % (endByte, int(folder_cache[searchpath]["st_size"])-1, request_id)
 							self.wfile.write(bytes(response, 'UTF-8'))
-							logging.info("Box request: %s Range:%s Status: 416", boxurl, boxheaders["Range"])
+							logging.info("%s: Box request: %s Range:%s Status: 416", request_id, boxurl, boxheaders["Range"])
 							return
 					else:
 						startByte = rangeSplit[0]
 						if startByte > (int(folder_cache[searchpath]["st_size"])-1):
-							startByte = int(folder_cache[searchpath]["st_size"])-1
+							self.send_response(416)
+							self.send_header('Content-Type', 'text/html')
+							self.send_header('Connection', 'close')
+							self.end_headers()
+							response='''
+								<html>
+								<head>
+								<title>416 Range Not Satisfiable</title>
+								</head>
+								<body>
+								<h1>416 Range Not Satisfiable</h1>
+								<p>Request out of range (startByte) was %d should be less than %d.</p>
+								<p>Request id: %s</p>
+								</body>
+								</html>
+							''' % (startByte, int(folder_cache[searchpath]["st_size"])-1, request_id)
+							logging.info("%s: Box request: %s Range:%s Status: 416", request_id, boxurl, boxheaders["Range"])
+							self.wfile.write(bytes(response, 'UTF-8'))
+							return
 						endByte = int(folder_cache[searchpath]["st_size"])-1
 					boxheaders["Range"] = "bytes="+str(startByte)+"-"+str(endByte)
 				boxurl = 'https://api.box.com/2.0/files/'+str(folder_cache[path]["boxid"])+'/content'
-				logging.info("Box request: %s headers:%s", boxurl, pprint.saferepr(boxheaders))	
+				logging.info("%s: Box request: %s headers:%s", request_id, boxurl, pprint.saferepr(boxheaders))	
 				chunk_cnt = 1
 				chunk_size = 524288
+				#chunk_size = 1048576
 				downloaded = 0
-				self.send_response(200)
+				self.send_response(response_code)
+				self.send_header('Content-Type', folder_cache[searchpath]["mime"])
+				if "Range" in self.headers:
+					content_length = (endByte - startByte)+1
+					self.send_header('Content-Length', str(content_length))
+					self.send_header('Content-Range', "bytes "+str(startByte)+"-"+str(endByte)+"/"+str(folder_cache[searchpath]["st_size"]))
+					self.send_header('Connection', 'keep-alive')
+				else:
+					self.send_header('Content-Length', str(folder_cache[searchpath]["st_size"]))
+				self.end_headers()
 				r_dl = http_pool_mgr.request('GET', boxurl, headers=boxheaders, preload_content=False)
 				if r_dl.status == 200 or r_dl.status == 206:
-					self.send_header('Content-Type', folder_cache[searchpath]["mime"])
-					self.send_header('Content-Length', folder_cache[searchpath]["st_size"])
-					if "Range" in self.headers:
-						self.send_header('Content-Range', "bytes="+str(startByte)+"-"+str(endByte)+"/"+str(folder_cache[searchpath]["st_size"]))
-					self.end_headers()
-					if "Range" not in boxheaders:
-						boxheaders["Range"] = "not set"
+					logging.info("%s: Box request success: %s Range:%s Status: %s", request_id, boxurl, boxheaders["Range"], str(r_dl.status))
 					for chunk in r_dl.stream(chunk_size):
+						logging.info("%s: Box response chunk: %s Range:%s chunk_cnt:%s", request_id, boxurl, boxheaders["Range"], str(chunk_cnt))
 						try:
 							downloaded += len(chunk)
+							chunk_cnt += 1
 							self.wfile.write(chunk)
+							self.wfile.flush()
 						except:
 							e = sys.exc_info()
-							logging.error("Box request: %s Range:%s Exception:%s", boxurl, boxheaders["Range"], pprint.saferepr(e))
+							logging.error("%s: Box request: %s Range:%s Exception:%s", request_id, boxurl, boxheaders["Range"], pprint.saferepr(e))
 							break;
-						chunk_cnt += 1
-					r_dl.release_conn()
 				else:
-					self.send_header('Content-Type', 'text/html')
-					self.send_header('Connection', 'close')
-					self.end_headers()
-					response='''
-						<html>
-						<head>
-						<title>Response from Box: %d</title>
-						</head>
-						<body>
-						<h1>Response: %d</h1>
-						<p>Couldn't load content.</p>
-						</body>
-						</html>
-					''' % (r_dl.status, r_dl.status)
-					self.wfile.write(response.encode('UTF-8'))
+					logging.info("%s: Box request failed: %s Range:%s Status: %s", request_id, boxurl, boxheaders["Range"], str(r_dl.status))
+				r_dl.release_conn()
 				end_dl = time.time()
 				elapse_dl = end_dl-start_dl
 				if "Range" not in boxheaders:
 					boxheaders["Range"] = "not set"
-				logging.info("Box request: %s Range:%s Status: %d Released, Elapsed:%f Downloaded(Chunks):%d bytes Downloaded(b):%d bytes", boxurl, boxheaders["Range"], r_dl.status, elapse_dl, (chunk_cnt*chunk_size), downloaded)
+				logging.info("%s: Box request: %s Range:%s Status: %d Released, Elapsed:%f Downloaded(Chunks):%d bytes Downloaded(b):%d bytes", request_id, boxurl, boxheaders["Range"], r_dl.status, elapse_dl, (chunk_cnt*chunk_size), downloaded)
 				return
 		else:
 			self.send_response(404)
@@ -251,8 +270,9 @@ class S(SimpleHTTPRequestHandler):
 
 	def do_HEAD(self):
 		global folder_cache_last_refresh, folder_cache, FILESYSTEM_REFRESH_TIME
+		request_id = uuid.uuid4()
 		response = ""
-		logging.info("HEAD request, Path: %s Headers: %s", str(self.path), pprint.saferepr(str(self.headers)))
+		logging.info("%s: HEAD request, Path: %s Headers: %s", request_id, str(self.path), pprint.saferepr(str(self.headers)))
 		if (time.time() - folder_cache_last_refresh) > FILESYSTEM_REFRESH_TIME:
 			folder_cache_last_refresh = time.time()
 			populateFolderCache("/")
@@ -265,10 +285,10 @@ class S(SimpleHTTPRequestHandler):
 			self.send_header('Connection', 'close')
 			if folder_cache[searchpath]["type"] == "folder":
 				self.send_header('Accept-Ranges', 'bytes')
-				logging.info("HEAD request, Path: %s return folder info", str(self.path))
+				logging.info("%s: HEAD request, Path: %s return folder info", request_id, str(self.path))
 				self.send_header('Content-Type', 'text/html;charset=UTF-8')
 			if folder_cache[searchpath]["type"] == "file":
-				logging.info("HEAD request, Path: %s return file info", str(self.path))
+				logging.info("%s: HEAD request, Path: %s return file info", request_id, str(self.path))
 				self.send_header('Content-Type', folder_cache[searchpath]["mime"])
 				self.send_header('Content-Length', folder_cache[searchpath]["st_size"])
 			self.end_headers()
@@ -319,17 +339,20 @@ class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
     pass
 
 def run(server_class=HTTPServer, handler_class=S, port=8080):
-	global folder_cache_last_refresh
-	logging.basicConfig(stream=sys.stdout,level=logging.WARN)
+	global folder_cache_last_refresh, loglevel
+	logging.basicConfig(stream=sys.stdout,level=loglevel)
 	server_address = ('', port)
 	handler_class.server_version = "nginx/1.14.0"
 	handler_class.sys_version = "(Ubuntu)"
 	#handler_class.protocol_version = "HTTP/1.1"  # this doesn't work correctly
-	httpd = ThreadingSimpleServer(server_address, S)
+	httpd = ThreadingSimpleServer(server_address, S)	# multi-threaded
+	#httpd = HTTPServer(server_address, S)   			# single-threaded
 	logging.info('populateFolderCache first time...\n')
 	populateFolderCache("/")
 	folder_cache_last_refresh = time.time()
 	logging.info('Starting httpd...\n')
+	# set urllib3.logging
+	logging.getLogger("urllib3").setLevel(logging.WARNING)
 	try:
 		httpd.serve_forever()
 	except KeyboardInterrupt:
