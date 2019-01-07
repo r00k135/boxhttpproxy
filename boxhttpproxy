@@ -1,0 +1,102 @@
+#! /bin/sh
+
+### BEGIN INIT INFO
+# Provides:		boxhttpserver
+# Required-Start:	$remote_fs $syslog
+# Required-Stop:	$remote_fs $syslog
+# Default-Start:	2 3 4 5
+# Default-Stop:		
+# Short-Description:	Proxy Box.com online storage to a local network and translate from HTTPS to HTTP
+### END INIT INFO
+
+set -e
+
+# /etc/init.d/boxhttpproxy: start and stop the Box.com http proxy daemon
+
+test -x /usr/sbin/boxhttpserver.py || exit 0
+
+umask 022
+
+if test -f /etc/boxhttpproxy/boxhttpproxy.conf; then
+    . /etc/boxhttpproxy/boxhttpproxy.conf
+fi
+
+. /lib/lsb/init-functions
+
+BOXPROXY_OPTS="${PORT}"
+if [ -n "$2" ]; then
+    BOXPROXY_OPTS="${BOXPROXY_OPTS} $2"
+fi
+
+# Are we running from init?
+run_by_init() {
+    ([ "$previous" ] && [ "$runlevel" ]) || [ "$runlevel" = S ]
+}
+
+check_privsep_dir() {
+    if [ ! -f "${LOGFILE}" ]; then
+		touch "${LOGFILE}"
+		chown "${RUNNING_USER}" "${LOGFILE}"
+    fi
+}
+
+check_tokens() {
+    # Create the PrivSep empty dir if necessary
+    if [ ! -f /etc/boxhttpproxy/tokens/tokens ]; then
+    	sudo su ${RUNNING_USER} -c "/usr/sbin/boxhttpserver.py firstrun"
+    	echo "Re-run program"
+    	exit 0
+    fi
+}
+
+export PATH="${PATH:+$PATH:}/usr/sbin:/sbin"
+
+case "$1" in
+  start)
+	echo "Starting Box.com http proxy server"
+	check_privsep_dir
+	check_tokens
+	log_daemon_msg "Starting Box.com http proxy server" "boxhttpserver" || true
+	if start-stop-daemon --start --quiet --oknodo --background --make-pidfile --pidfile ${PIDFILE} --chuid ${RUNNING_USER} --exec /bin/bash -- -c "/usr/sbin/boxhttpserver.py $BOXPROXY_OPTS >> ${LOGFILE} 2>&1"; then
+		sleep 0.5
+	    ps auxwww | grep python3 | grep boxhttpserver | grep -v grep | grep -v bash | awk '{print $2}' | tail -1 > ${PIDFILE}
+	    log_end_msg 0 || true
+	else
+	    log_end_msg 1 || true
+	fi
+	;;
+  stop)
+	log_daemon_msg "Stopping Box.com http proxy server" "boxhttpserver" || true
+	if start-stop-daemon --stop --quiet --oknodo --pidfile ${PIDFILE}; then
+            rm ${PIDFILE}
+	    log_end_msg 0 || true
+	else
+	    log_end_msg 1 || true
+	fi
+	;;
+
+  restart)
+	check_privsep_dir
+	log_daemon_msg "Restarting Box.com http proxy server" "boxhttpserver" || true
+	start-stop-daemon --stop --oknodo --retry 2 --pidfile ${PIDFILE}
+        rm ${PIDFILE}
+    sleep 6
+	if start-stop-daemon --start --quiet --oknodo --background --make-pidfile --pidfile ${PIDFILE} --chuid ${RUNNING_USER} --exec /bin/bash -- -c "/usr/sbin/boxhttpserver.py $BOXPROXY_OPTS >> ${LOGFILE} 2>&1"; then
+	    ps auxwww | grep python3 | grep boxhttpserver | grep -v grep | grep -v bash | awk '{print $2}' | tail -1 > ${PIDFILE}
+	    log_end_msg 0 || true
+	else
+	    log_end_msg 1 || true
+	fi
+	;;
+
+  status)
+	check_for_upstart 1
+	status_of_proc -p /var/run/boxhttpserver.pid /usr/sbin/boxhttpserver.py boxhttpserver && exit 0 || exit $?
+	;;
+
+  *)
+	log_action_msg "Usage: /etc/init.d/boxhttpproxy {start|stop|restart|status}" || true
+	exit 1
+esac
+
+exit 0
