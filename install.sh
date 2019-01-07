@@ -70,8 +70,9 @@ if [ "$DISTRIB_ID" = "Ubuntu" ]; then
 	cp boxhttpproxy /etc/init.d/
 	chown root:root /etc/init.d/boxhttpproxy
 	chmod +x /etc/init.d/boxhttpproxy
+	update-rc.d -f boxhttpproxy remove
 	update-rc.d boxhttpproxy defaults
-	update-rc.d boxhttpproxy enable
+	update-rc.d boxhttpproxy enable 3
 	echo "Run with \"sudo /etc/init.d/boxhttpproxy start\""
 fi
 
