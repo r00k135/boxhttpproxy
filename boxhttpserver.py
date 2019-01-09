@@ -69,6 +69,7 @@ http_pool_mgr = urllib3.PoolManager(maxsize=50,
 
 
 class S(SimpleHTTPRequestHandler):
+	#timeout = 60 # StreamRequestHandler.setup - having this enabled causes Ready Player One to not work, very weird
 	def log_message(self, format, *args):
 		logging.error("%s - - [%s] %s" % (self.client_address[0], 
 			self.log_date_time_string(), 
@@ -310,7 +311,7 @@ def stream_file_from_box(boxurl, request_id, connection, response_code, boxheade
 				chunk_cnt += 1
 				try:
 					connection.wfile.write(chunk)
-					connection.wfile.flush()
+					#connection.wfile.flush()
 				except:
 					e = sys.exc_info()
 					logging.error("%s: %s: Client Exception Detail:%s", request_id, str(time.time()), pprint.saferepr(e))
