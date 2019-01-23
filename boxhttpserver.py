@@ -10,6 +10,7 @@ import code
 import pprint
 import json
 import time
+import ssl
 import urllib3
 import urllib.parse
 import certifi
@@ -62,7 +63,8 @@ http_pool_mgr = urllib3.PoolManager(maxsize=50,
     headers=http_pool_headers,
     block=False,
     cert_reqs='CERT_REQUIRED',
-    ca_certs=certifi.where())
+    ca_certs=certifi.where(),
+    ssl_version=ssl.PROTOCOL_TLSv1_2)
 #urllib3.disable_warnings()
 #logging.captureWarnings(False)
 
