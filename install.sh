@@ -16,7 +16,7 @@ echo "ID:"$(id -u)":Running install as root user..."
 
 echo "Checking dependencies..."
 source /etc/*-release
-if [ "$DISTRIB_ID" = "Ubuntu" ]; then
+if [ "$DISTRIB_ID" = "Ubuntu" -o "$ID_LIKE" = "debian" ]; then
 	echo "Ubuntu install"
 	INSTALLED=""
 	CHK_PYTHON=`dpkg --get-selections | egrep "^python3"`
@@ -65,15 +65,28 @@ fi
 chown "${RUNNING_USER}" "${INSTALL_DIR}/sbin/boxhttpserver.py"
 chmod +x "${INSTALL_DIR}/sbin/boxhttpserver.py"
 
-if [ "$DISTRIB_ID" = "Ubuntu" ]; then
-	echo "Installing Ubuntu start scripts"
+if [ "$DISTRIB_ID" = "Ubuntu" -o "$ID" = "raspbian" ]; then
+	echo "Installing Debian style start scripts"
 	cp boxhttpproxy /etc/init.d/
 	chown root:root /etc/init.d/boxhttpproxy
 	chmod +x /etc/init.d/boxhttpproxy
-	update-rc.d -f boxhttpproxy remove
-	update-rc.d boxhttpproxy defaults
-	update-rc.d boxhttpproxy enable 3
+fi
+
+if [ "$DISTRIB_ID" = "Ubuntu"  ]; then
+	echo "Installing Ubuntu start scripts"
+        update-rc.d -f boxhttpproxy remove
+        update-rc.d boxhttpproxy defaults
+        update-rc.d boxhttpproxy enable 3
 	echo "Run with \"sudo /etc/init.d/boxhttpproxy start\""
+fi
+
+if [ "$ID" = "raspbian" ]; then
+	echo "Installing Raspbian start scripts"
+        update-rc.d -f boxhttpproxy remove
+        update-rc.d boxhttpproxy defaults
+        update-rc.d boxhttpproxy enable 3
+	systemctl enable boxhttpproxy
+	echo "Run with \"sudo systemctl start boxhttpproxy\""
 fi
 
 echo "Install complete"
